@@ -2,10 +2,12 @@
  * Shared display formatters render dashboard values with stable unit boundaries,
  * precision, timestamp validation, and unavailable-state handling.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   formatByteSize,
+  formatDateTime,
   formatDurationMs,
+  formatShortDate,
   formatTime,
   formatUptime,
   formatUsd,
@@ -111,39 +113,43 @@ describe("formatUsd", () => {
   });
 });
 
-describe("formatTime", () => {
-  it.each([
-    ["missing", undefined],
-    ["empty", ""],
-    ["malformed", "not-a-date"],
-    ["numeric NaN", Number.NaN],
-    ["invalid Date", new Date(Number.NaN)],
-    ["outside TimeClip", 8.64e15 + 1],
-    ["calendar-invalid ISO timestamp", "2026-02-31T00:00:00Z"],
-    ["non-leap February 29", "2026-02-29T00:00:00Z"],
-    ["month zero", "2026-00-01T00:00:00Z"],
-  ])("returns the fallback for %s input", (_label, value) => {
-    expect(
-      formatTime(value, { fallback: "Unavailable", locale: "en-US" }),
-    ).toBe("Unavailable");
-  });
+const invalidDateInputs = [
+  ["missing", undefined],
+  ["empty", ""],
+  ["malformed", "not-a-date"],
+  ["numeric NaN", Number.NaN],
+  ["invalid Date", new Date(Number.NaN)],
+  ["outside TimeClip", 8.64e15 + 1],
+  ["calendar-invalid ISO timestamp", "2026-02-31T00:00:00Z"],
+  ["non-leap February 29", "2026-02-29T00:00:00Z"],
+  ["month zero", "2026-00-01T00:00:00Z"],
+] as const;
+
+describe.each([
+  ["formatDateTime", formatDateTime],
+  ["formatTime", formatTime],
+  ["formatShortDate", formatShortDate],
+])("%s", (_name, formatter) => {
+  it.each(invalidDateInputs)(
+    "returns the fallback for %s input",
+    (_label, value) => {
+      expect(
+        formatter(value, { fallback: "Unavailable", locale: "en-US" }),
+      ).toBe("Unavailable");
+    },
+  );
 
   it("preserves valid epoch, Date, ISO, leap-day, and parseable string inputs", () => {
-    const localeSpy = vi
-      .spyOn(Date.prototype, "toLocaleTimeString")
-      .mockReturnValue("12:34:56 PM");
-
-    expect(formatTime(0, { locale: "en-US" })).toBe("12:34:56 PM");
-    expect(formatTime(new Date(0), { locale: "en-US" })).toBe("12:34:56 PM");
-    expect(formatTime("2026-06-05T10:00:00Z", { locale: "en-US" })).toBe(
-      "12:34:56 PM",
+    expect(formatter(0, { locale: "en-US" })).not.toBe("—");
+    expect(formatter(new Date(0), { locale: "en-US" })).not.toBe("—");
+    expect(formatter("2026-06-05T10:00:00Z", { locale: "en-US" })).not.toBe(
+      "—",
     );
-    expect(formatTime("2024-02-29T00:00:00Z", { locale: "en-US" })).toBe(
-      "12:34:56 PM",
+    expect(formatter("2024-02-29T00:00:00Z", { locale: "en-US" })).not.toBe(
+      "—",
     );
-    expect(formatTime("June 5, 2026 10:00:00", { locale: "en-US" })).toBe(
-      "12:34:56 PM",
+    expect(formatter("June 5, 2026 10:00:00", { locale: "en-US" })).not.toBe(
+      "—",
     );
-    expect(localeSpy).toHaveBeenCalledTimes(5);
   });
 });

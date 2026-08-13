@@ -74,6 +74,20 @@ type DurationFormatOptions = {
 
 const ISO_CALENDAR_DATE_PREFIX = /^(\d{4})-(\d{2})-(\d{2})(?:T|$)/;
 
+/**
+ * Parse display timestamps without allowing JavaScript Date normalization to
+ * turn impossible ISO calendar dates into plausible output.
+ */
+function parseDisplayDate(
+  value: number | string | Date | null | undefined,
+): Date | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "string" && !hasValidIsoCalendarDate(value)) return null;
+
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
 function hasValidIsoCalendarDate(value: string): boolean {
   const match = ISO_CALENDAR_DATE_PREFIX.exec(value);
   if (!match) return true;
@@ -179,9 +193,8 @@ export function formatDateTime(
   options: DateFormatOptions = {},
 ): string {
   const { fallback = "—", locale } = options;
-  if (value == null || value === "") return fallback;
-  const parsed = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(parsed.getTime())) return fallback;
+  const parsed = parseDisplayDate(value);
+  if (!parsed) return fallback;
   return parsed.toLocaleString(locale);
 }
 
@@ -193,12 +206,8 @@ export function formatTime(
   options: DateFormatOptions = {},
 ): string {
   const { fallback = "—", locale } = options;
-  if (value == null || value === "") return fallback;
-  if (typeof value === "string" && !hasValidIsoCalendarDate(value)) {
-    return fallback;
-  }
-  const parsed = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(parsed.getTime())) return fallback;
+  const parsed = parseDisplayDate(value);
+  if (!parsed) return fallback;
   return parsed.toLocaleTimeString(locale);
 }
 
@@ -210,9 +219,8 @@ export function formatShortDate(
   options: DateFormatOptions = {},
 ): string {
   const { fallback = "—", locale } = options;
-  if (value == null || value === "") return fallback;
-  const parsed = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(parsed.getTime())) return fallback;
+  const parsed = parseDisplayDate(value);
+  if (!parsed) return fallback;
   return parsed.toLocaleDateString(locale, {
     year: "numeric",
     month: "short",
