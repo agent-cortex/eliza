@@ -184,6 +184,15 @@ Relevant runtime knobs (all `PROMPT_BATCHER_*`, read in `src/runtime.ts`):
 - `PROMPT_BATCHER_MAX_PARALLEL_CALLS`
 - `PROMPT_BATCHER_MODEL_SEPARATION`
 
+Each setting is validated once at runtime construction by
+`resolvePromptBatcherConfig` (`src/utils/prompt-batcher-config.ts`). Absent
+settings fall back to their defaults; an explicit value that is non-finite
+(`Infinity`/`-Infinity`/`NaN`) or outside its supported domain fails fast with a
+typed `ElizaError` (code `INVALID_PROMPT_BATCHER_CONFIG`) naming the offending
+setting. Count/token/parallelism/interval knobs require positive integers;
+`PROMPT_BATCHER_PACKING_DENSITY` is a ratio in `(0, 1]` and
+`PROMPT_BATCHER_MODEL_SEPARATION` a ratio in `[0, 1]`.
+
 The prompt batcher implementation lives in `src/utils/prompt-batcher/` (`batcher.ts`, `dispatcher.ts`). The lower-level queue primitives (`PriorityQueue` / `BatchProcessor` / `TaskDrain` / `BatchQueue`) live in `src/utils/batch-queue/`.
 
 ### Task system

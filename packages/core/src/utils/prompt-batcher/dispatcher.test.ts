@@ -28,6 +28,12 @@ function makeResolvedSection(id: string, maxRetries: number): ResolvedSection {
 	};
 }
 
+// Each isolated section becomes its own call plan, so N isolated sections give
+// the dispatcher N concurrent units to schedule through the semaphore.
+function makeIsolatedSection(id: string): ResolvedSection {
+	return { ...makeResolvedSection(id, 0), isolated: true };
+}
+
 describe("PromptDispatcher", () => {
 	test("passes section retry budget into structured model calls", async () => {
 		const seen: unknown[] = [];
@@ -176,5 +182,67 @@ describe("PromptDispatcher", () => {
 
 		expect(seen).toHaveLength(1);
 		expect(seen[0]?.params?.priority).toBe("interactive");
+	});
+
+	// Regression for #20384: a configured finite maxParallelCalls must remain an
+	// enforced concurrency bound. Before the config-boundary fix an Infinity
+	// override reached the Semaphore and disabled throttling; here we prove a
+	// finite bound caps peak in-flight model calls at exactly the configured
+	// value.
+	test("enforces maxParallelCalls=1 so no two model calls run at once", async () => {
+		let inFlight = 0;
+		let peak = 0;
+		const runtime = createMockRuntime({
+			dynamicPromptExecFromState: async () => {
+				inFlight += 1;
+				peak = Math.max(peak, inFlight);
+				await new Promise((resolve) => setTimeout(resolve, 15));
+				inFlight -= 1;
+				return {};
+			},
+		});
+		const dispatcher = new PromptDispatcher({
+			packingDensity: 1,
+			maxTokensPerCall: 8_000,
+			maxParallelCalls: 1,
+			modelSeparation: 1,
+			maxSectionsPerCall: 8,
+		});
+
+		await dispatcher.dispatch(
+			["a", "b", "c", "d", "e"].map(makeIsolatedSection),
+			runtime,
+		);
+
+		expect(peak).toBe(1);
+	});
+
+	test("caps peak concurrency at a configured finite maxParallelCalls=2", async () => {
+		let inFlight = 0;
+		let peak = 0;
+		const runtime = createMockRuntime({
+			dynamicPromptExecFromState: async () => {
+				inFlight += 1;
+				peak = Math.max(peak, inFlight);
+				await new Promise((resolve) => setTimeout(resolve, 15));
+				inFlight -= 1;
+				return {};
+			},
+		});
+		const dispatcher = new PromptDispatcher({
+			packingDensity: 1,
+			maxTokensPerCall: 8_000,
+			maxParallelCalls: 2,
+			modelSeparation: 1,
+			maxSectionsPerCall: 8,
+		});
+
+		await dispatcher.dispatch(
+			["a", "b", "c", "d", "e"].map(makeIsolatedSection),
+			runtime,
+		);
+
+		// It reaches the bound (proves real parallelism) but never exceeds it.
+		expect(peak).toBe(2);
 	});
 });
