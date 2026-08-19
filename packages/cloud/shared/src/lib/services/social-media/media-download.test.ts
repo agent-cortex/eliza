@@ -71,6 +71,41 @@ describe("downloadSocialMediaBytes", () => {
     expect(cancelled).toBe(true);
   });
 
+  test("surfaces the HTTP error without waiting for a non-cooperative body cancel", async () => {
+    // A body whose cancel() never settles models a non-cooperative connection
+    // teardown; the authoritative HTTP status must surface without blocking.
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          return new Promise<void>(() => undefined);
+        },
+      }),
+      { status: 503 },
+    );
+    safeFetch.mockResolvedValue(response);
+
+    const download = downloadSocialMediaBytes("https://media.example/unavailable.png", {
+      httpErrorMessage: (status) => `Provider download failed: ${status}`,
+    }).then(
+      (value) => ({ kind: "resolved" as const, value }),
+      (cause: ElizaError) => ({ kind: "rejected" as const, cause }),
+    );
+
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    const hangGuard = new Promise<{ kind: "hung" }>((resolve) => {
+      guard = setTimeout(() => resolve({ kind: "hung" }), 1_000);
+    });
+    const settled = await Promise.race([download, hangGuard]);
+    if (guard) clearTimeout(guard);
+
+    expect(settled.kind).toBe("rejected");
+    const error = (settled as { kind: "rejected"; cause: ElizaError }).cause;
+    expect(error).toBeInstanceOf(ElizaError);
+    expect(error.code).toBe("SOCIAL_MEDIA_DOWNLOAD_HTTP_ERROR");
+    expect(error.message).toBe("Provider download failed: 503");
+    expect((error.context as { status: number }).status).toBe(503);
+  });
+
   test("rejects a declared overflow before reading and cancels the body", async () => {
     let reads = 0;
     let cancelled = false;

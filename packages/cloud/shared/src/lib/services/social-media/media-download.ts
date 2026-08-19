@@ -148,7 +148,11 @@ export async function downloadSocialMediaBytes(
       deadline,
     ]);
     if (!response.ok) {
-      await cancelBody(response);
+      // error-policy:J6 The HTTP status is the authoritative failure; a
+      // non-cooperative response body whose cancellation never settles must
+      // not block surfacing it, so teardown is fire-and-forget best-effort.
+      // cancelBody swallows its own rejection, so no unhandled rejection escapes.
+      void cancelBody(response);
       const message =
         options.httpErrorMessage?.(response.status) ?? `Media fetch failed: ${response.status}`;
       throw downloadError(message, "SOCIAL_MEDIA_DOWNLOAD_HTTP_ERROR", {
