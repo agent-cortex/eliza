@@ -193,6 +193,27 @@ export class CloudContainerService
     const baseInterval = 5_000;
     const maxInterval = 30_000;
 
+    // Exponential backoff delay for the poll that follows the current attempt.
+    const nextDelay = () =>
+      Math.min(baseInterval * 2 ** Math.min(attempt - 1, 3), maxInterval);
+
+    // Guard the fire-and-forget scheduling so a rejected poll promise can never
+    // surface as an unhandledRejection (which terminates the process under
+    // Node's default policy). Mirrors startHealthMonitoring's .catch() tolerance.
+    const scheduleNext = (delay: number) => {
+      tracked.pollingTimer = setTimeout(() => {
+        // error-policy:J7 diagnostics must not kill the poll loop; poll() already
+        // handles its own errors, so a rejection here would be a defect — log it.
+        poll().catch((err: unknown) => {
+          logger.error(
+            `[CloudContainer] Unexpected polling failure for ${containerId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        });
+      }, delay);
+    };
+
     const poll = async () => {
       attempt++;
       if (attempt > maxAttempts) {
@@ -202,33 +223,55 @@ export class CloudContainerService
         return;
       }
 
-      const container = await this.getContainer(containerId);
-      const status = container.status;
+      try {
+        const container = await this.getContainer(containerId);
+        const status = container.status;
 
-      logger.debug(`[CloudContainer] Poll #${attempt} for ${containerId}: status=${status}`);
+        logger.debug(`[CloudContainer] Poll #${attempt} for ${containerId}: status=${status}`);
 
-      if (status === "running") {
-        logger.info(
-          `[CloudContainer] Container ${containerId} is now running at ${container.load_balancer_url}`
-        );
-        this.startHealthMonitoring(containerId);
-        return;
-      }
-
-      if (status === "failed" || status === "stopped" || status === "suspended") {
-        logger.warn(`[CloudContainer] Container ${containerId} reached terminal state: ${status}`);
-        if (container.error_message) {
-          logger.error(`[CloudContainer] Error: ${container.error_message}`);
+        if (status === "running") {
+          logger.info(
+            `[CloudContainer] Container ${containerId} is now running at ${container.load_balancer_url}`
+          );
+          this.startHealthMonitoring(containerId);
+          return;
         }
-        return;
-      }
 
-      // Schedule next poll with exponential backoff
-      const delay = Math.min(baseInterval * 2 ** Math.min(attempt - 1, 3), maxInterval);
-      tracked.pollingTimer = setTimeout(poll, delay);
+        if (status === "failed" || status === "stopped" || status === "suspended") {
+          logger.warn(
+            `[CloudContainer] Container ${containerId} reached terminal state: ${status}`
+          );
+          if (container.error_message) {
+            logger.error(`[CloudContainer] Error: ${container.error_message}`);
+          }
+          return;
+        }
+
+        // Still transitional — schedule the next poll with exponential backoff.
+        scheduleNext(nextDelay());
+      } catch (err) {
+        // error-policy:J7 a transient API error (network blip, 5xx, timeout)
+        // during the ~8-12 min deployment window must not kill the poll loop.
+        // Reschedule with backoff until attempts are exhausted, mirroring the
+        // tolerance of startHealthMonitoring() rather than letting the promise
+        // reject and the container fall out of tracking forever.
+        logger.warn(
+          `[CloudContainer] Poll #${attempt} for ${containerId} failed transiently: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+
+        if (attempt < maxAttempts) {
+          scheduleNext(nextDelay());
+        } else {
+          logger.error(
+            `[CloudContainer] Polling gave up for container ${containerId} after ${maxAttempts} attempts of transient failures`
+          );
+        }
+      }
     };
 
-    tracked.pollingTimer = setTimeout(poll, baseInterval);
+    scheduleNext(baseInterval);
   }
 
   /**
