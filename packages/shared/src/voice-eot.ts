@@ -127,25 +127,16 @@ const TRAILING_CONTINUATIONS = new Set([
 ]);
 
 /**
- * Question-tag suffixes that end an utterance (matched case-insensitively).
- * The union of both prior surfaces: punctuated forms (the UI set) plus the
- * bare forms (`right` / `yeah` / `correct`) the plugin relied on for the
- * no-trailing-`?` case. A punctuated tag is also caught by the sentence-final
- * punctuation rule, which fires first.
+ * Bare question-tag words the plugin relied on for the no-trailing-`?` case
+ * (`right` / `yeah` / `correct`). Matched by exact final-TOKEN equality, not
+ * string suffix: `lower.endsWith("right")` also matched ordinary words such as
+ * "incorrect", "alright", "downright", and "copyright", pushing plain statements
+ * into the 0.85 commit band and causing the agent to barge in early. The
+ * punctuated forms (`right?`, `correct?`, …) the UI set once carried are dead
+ * here — the sentence-final punctuation rule fires first — so only the bare
+ * union remains, and it now compares the punctuation-stripped last word.
  */
-const QUESTION_TAGS = [
-  "right?",
-  "yeah?",
-  "ok?",
-  "okay?",
-  "correct?",
-  "hm?",
-  "huh?",
-  "eh?",
-  "right",
-  "yeah",
-  "correct",
-];
+const BARE_QUESTION_TAGS = new Set(["right", "yeah", "correct"]);
 
 /**
  * Probability in [0,1] that `transcript` is a COMPLETE turn (the speaker is
@@ -155,7 +146,7 @@ const QUESTION_TAGS = [
  *
  *   1  Trailing ellipsis ("…" / "..")                       0.20  (trail-off)
  *   2  Sentence-final punctuation (. ! ?)                   0.95
- *   3  Question-tag suffix ("right?", "yeah", "correct")    0.85
+ *   3  Bare question-tag last word ("yeah", "correct")       0.85
  *   4  Trailing conjunction (and / but / because / …)       0.15  (mid-clause)
  *   5  Trailing filler / hedge (um / uh / maybe / …)        0.20  (holding floor)
  *   6  Trailing preposition / article (to / the / with …)   0.20  (incomplete NP)
@@ -178,10 +169,6 @@ export function scoreEndOfTurnHeuristic(transcript: string): number {
   if (/[.!?]$/.test(text)) return 0.95;
 
   const lower = text.toLowerCase();
-  for (const tag of QUESTION_TAGS) {
-    if (lower.endsWith(tag)) return 0.85;
-  }
-
   const words = lower
     .replace(/[^a-z0-9'\s-]/gi, "")
     .split(/\s+/)
@@ -189,6 +176,11 @@ export function scoreEndOfTurnHeuristic(transcript: string): number {
   if (words.length === 0) return 0.5;
 
   const lastWord = trimEndCharacters(words[words.length - 1], "',;:-");
+  // Bare question-tag as the FINAL WORD → the speaker is confirming/checking
+  // and is done ("that makes sense correct"). Compared by exact token equality
+  // so a word merely ENDING in a tag ("incorrect", "alright", "downright",
+  // "copyright") is not misread as a completed turn.
+  if (BARE_QUESTION_TAGS.has(lastWord)) return 0.85;
   // Trailing conjunction / filler / incomplete phrase → mid-clause, the speaker
   // is continuing. Checked BEFORE the short-utterance rule so a 2-word trail-off
   // ("going to", "and so", "we could") is NOT misread as a complete command.

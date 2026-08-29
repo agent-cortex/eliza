@@ -20,11 +20,36 @@ describe("scoreEndOfTurnHeuristic — canonical heuristic", () => {
     expect(score("stop!")).toBe(0.95);
   });
 
-  it("rule 3: question-tag suffix → complete (0.85), bare and punctuated", () => {
-    // Punctuated tags fall to rule 2 first; bare tags exercise rule 3.
+  it("rule 3: bare question-tag as final word → complete (0.85)", () => {
+    // Punctuated tags fall to rule 2 first; bare final-word tags exercise rule 3.
     expect(score("that's correct right")).toBe(0.85);
     expect(score("it is ready yeah")).toBe(0.85);
     expect(score("that makes sense correct")).toBe(0.85);
+    // A legitimate multi-word confirmation ending in a bare tag stays 0.85.
+    expect(score("it's the third one, correct")).toBe(0.85);
+    // Bare tags alone still commit (tag check precedes the short-utterance rule).
+    expect(score("correct")).toBe(0.85);
+    expect(score("yeah")).toBe(0.85);
+    expect(score("right")).toBe(0.85);
+  });
+
+  it("rule 3 regression: a word merely ending in a bare tag is NOT a tag (#29934)", () => {
+    // The old `lower.endsWith(tag)` matched these as suffix substrings and
+    // wrongly scored 0.85, making the agent barge in on plain statements.
+    // Token-equality matching leaves them in the no-signal / short bands.
+    expect(score("that is incorrect")).toBe(0.5);
+    expect(score("you are downright")).toBe(0.5);
+    expect(score("I need the copyright")).toBe(0.5);
+    expect(score("the outcome was alright")).toBe(0.5);
+    // None of these land in the 0.85 commit band anymore.
+    for (const s of [
+      "that is incorrect",
+      "you are downright",
+      "I need the copyright",
+      "the outcome was alright",
+    ]) {
+      expect(score(s)).not.toBe(0.85);
+    }
   });
 
   it("rule 4: trailing conjunction → mid-clause (0.15)", () => {
