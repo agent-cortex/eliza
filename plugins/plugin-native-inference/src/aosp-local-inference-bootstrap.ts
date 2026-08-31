@@ -550,6 +550,66 @@ export function buildGenerateArgsFromParams(
   return args;
 }
 
+/** Inputs for {@link resolveAospCompletionBudget}. */
+export interface ResolveAospCompletionBudgetParams {
+  /**
+   * Caller-requested completion budget in tokens. When omitted the whole
+   * remaining window after the prompt is granted; when present it is honoured
+   * exactly or rejected, never clamped down to fit.
+   */
+  requestedMaxTokens?: number;
+  /** Total context window (in tokens) the loaded AOSP model was created with. */
+  contextSize: number;
+  /** Token count of the complete, already-flattened prompt. */
+  promptTokenCount: number;
+}
+
+/**
+ * Derives the completion token budget for an AOSP local generation without ever
+ * silently clamping the request or truncating the prompt. The available window
+ * is `contextSize - promptTokenCount`. If the prompt fills or overflows the
+ * window there is no room to answer, so this rejects rather than truncating the
+ * model's context. An explicit `requestedMaxTokens` that exceeds the available
+ * window is rejected rather than clamped, because a caller that asked for a
+ * specific budget must observe the shortfall instead of receiving a shorter
+ * completion under the same call shape. Both refusals name the offending
+ * numbers so a caller can act on them. This mirrors the reject-never-clamp /
+ * reject-never-truncate doctrine of #28112 and stays a pure helper: it does not
+ * mutate generate args or touch the runtime generate path.
+ */
+export function resolveAospCompletionBudget(
+  params: ResolveAospCompletionBudgetParams,
+): number {
+  const { requestedMaxTokens, contextSize, promptTokenCount } = params;
+  const available = contextSize - promptTokenCount;
+  if (available <= 0) {
+    throw new ElizaError(
+      `[aosp-local-inference] prompt of ${promptTokenCount} tokens fills the ${contextSize}-token context window (available ${available}); refusing to truncate the prompt to make room for a completion`,
+      {
+        code: "AOSP_COMPLETION_PROMPT_OVERFLOW",
+        context: { contextSize, promptTokenCount, available },
+        severity: "fatal",
+      },
+    );
+  }
+  if (requestedMaxTokens !== undefined && requestedMaxTokens > available) {
+    throw new ElizaError(
+      `[aosp-local-inference] requested ${requestedMaxTokens} completion tokens exceed the ${available} available after a ${promptTokenCount}-token prompt in a ${contextSize}-token context; refusing to clamp the request`,
+      {
+        code: "AOSP_COMPLETION_BUDGET_EXCEEDED",
+        context: {
+          requestedMaxTokens,
+          contextSize,
+          promptTokenCount,
+          available,
+        },
+        severity: "fatal",
+      },
+    );
+  }
+  return requestedMaxTokens ?? available;
+}
+
 function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
